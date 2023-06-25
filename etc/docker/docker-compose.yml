@@ -1,0 +1,138 @@
+version: '3.8'
+
+services:
+  vskywms-blazor:
+    image: mycompanyname/vskywms-blazor:latest
+    container_name: vskywms-blazor
+    build:
+      context: ../../
+      dockerfile: src/VskyWMS.Blazor/Dockerfile.local
+    environment:
+      - ASPNETCORE_URLS=https://+:443;http://+:80;
+      - Kestrel__Certificates__Default__Path=/root/certificate/localhost.pfx
+      - Kestrel__Certificates__Default__Password=91f91912-5ab0-49df-8166-23377efaf3cc
+      - App__SelfUrl=https://localhost:44314
+      - AuthServer__RequireHttpsMetadata=false      
+      - AuthServer__Authority=https://localhost:44334/
+      - AuthServer__IsContainerizedOnLocalhost=true
+      - AuthServer__MetaAddress=http://vskywms-authserver
+      - RemoteServices__AbpAccountPublic__BaseUrl=http://vskywms-authserver 
+      - RemoteServices__Default__BaseUrl=http://vskywms-api
+      - Redis__Configuration=redis
+    ports:
+      - "44314:443"
+    depends_on:
+      - vskywms-api
+    restart: on-failure
+    volumes:
+      - ./certs:/root/certificate
+    networks:
+      - abp-network
+  vskywms-api:
+    image: mycompanyname/vskywms-api:latest
+    container_name: vskywms-api
+    hostname: vskywms-api
+    build:
+      context: ../../
+      dockerfile: src/VskyWMS.HttpApi.Host/Dockerfile.local
+    environment:
+      - ASPNETCORE_URLS=https://+:443;http://+:80;
+      - Kestrel__Certificates__Default__Path=/root/certificate/localhost.pfx
+      - Kestrel__Certificates__Default__Password=91f91912-5ab0-49df-8166-23377efaf3cc
+      - App__SelfUrl=https://localhost:44354
+      - App__HealthCheckUrl=http://vskywms-api/health-status
+      - AuthServer__RequireHttpsMetadata=false
+      - AuthServer__Authority=http://vskywms-authserver
+      - ConnectionStrings__Default=Data Source=sql-server;Initial Catalog=VskyWMS;User Id=sa;Password=myPassw0rd;MultipleActiveResultSets=true;TrustServerCertificate=True;
+      - Redis__Configuration=redis
+    ports:
+      - "44354:443"
+    depends_on:
+      sql-server:
+        condition: service_healthy
+      redis:
+        condition: service_healthy  
+    restart: on-failure    
+    volumes:
+      - ./certs:/root/certificate
+    networks:
+      - abp-network
+  vskywms-authserver:
+    image: mycompanyname/vskywms-authserver:latest
+    container_name: vskywms-authserver
+    build:
+      context: ../../
+      dockerfile: src/VskyWMS.AuthServer/Dockerfile.local
+    environment:
+      - ASPNETCORE_URLS=https://+:443;http://+:80;
+      - App__SelfUrl=https://localhost:44334
+      - App__CorsOrigins=http://localhost:4200,http://localhost:44307
+      - AuthServer__RequireHttpsMetadata=false
+      - AuthServer__Authority=http://vskywms-authserver
+      - Kestrel__Certificates__Default__Path=/root/certificate/localhost.pfx
+      - Kestrel__Certificates__Default__Password=91f91912-5ab0-49df-8166-23377efaf3cc
+      - ConnectionStrings__Default=Data Source=sql-server;Initial Catalog=VskyWMS;User Id=sa;Password=myPassw0rd;MultipleActiveResultSets=true;TrustServerCertificate=True;
+      - Redis__Configuration=redis
+    ports:
+      - "44334:443"
+    depends_on:
+      sql-server:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: on-failure
+    volumes:
+      - ./certs:/root/certificate
+    networks:
+      - abp-network
+
+  db-migrator:
+    image: mycompanyname/vskywms-db-migrator:latest
+    container_name: db-migrator
+    build:
+      context: ../../
+      dockerfile: src/VskyWMS.DbMigrator/Dockerfile.local
+    environment:
+      - OpenIddict__Applications__VskyWMS_BlazorServerTiered__RootUrl=https://localhost:44314
+      - OpenIddict__Applications__VskyWMS_Swagger__RootUrl=https://localhost:44354
+      - ConnectionStrings__Default=Data Source=sql-server;Initial Catalog=VskyWMS;User Id=sa;Password=myPassw0rd;MultipleActiveResultSets=true;TrustServerCertificate=True;
+    depends_on:
+      sql-server:
+        condition: service_healthy
+    networks:
+      - abp-network
+  
+  sql-server:
+    container_name: sql-server
+    image: mcr.microsoft.com/mssql/server:2019-latest
+    ports:
+      - "1434:1433"
+    environment:
+      SA_PASSWORD: "myPassw0rd"
+      ACCEPT_EULA: "Y"
+    volumes:
+      - sqldata:/var/opt/mssql
+    networks:
+      - abp-network  
+    healthcheck:
+      test: /opt/mssql-tools/bin/sqlcmd -S sql-server -U sa -P "myPassw0rd" -Q "SELECT 1" -b -o /dev/null
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+  redis:
+    container_name: redis
+    image: redis:alpine
+    ports:
+      - "6379:6379"
+    networks:
+      - abp-network
+    healthcheck:
+      test: ["CMD", "redis-cli","ping"]      
+volumes:
+  sqldata:
+    name: vskywms_sqldata
+networks:
+  abp-network:
+    name: vskywms-network
+    driver: bridge
